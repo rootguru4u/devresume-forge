@@ -1,0 +1,29 @@
+FROM node:18-alpine
+
+# Install development dependencies
+RUN apk update && apk upgrade && \
+    apk add --no-cache git && \
+    rm -rf /var/cache/apk/*
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install all dependencies (including dev dependencies)
+RUN npm ci
+
+# Install nodemon globally for development
+RUN npm install -g nodemon
+
+# Copy source code
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p uploads uploads/pdfs logs temp
+
+# Expose port
+EXPOSE 5000
+
+# Development server with hot reloading
+CMD ["npm", "run", "dev"] 

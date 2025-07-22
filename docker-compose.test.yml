@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # Frontend Test Build
+  frontend-test:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: build
+    environment:
+      - NODE_ENV=test
+      - REACT_APP_API_URL=http://backend-test:5000
+    networks:
+      - test-network
+
+  # Backend Test
+  backend-test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: build
+    environment:
+      - NODE_ENV=test
+      - PORT=5000
+      - MONGODB_URI=mongodb://mongodb-test:27017/resume_app_test
+      - JWT_SECRET=test-jwt-secret
+      - JWT_REFRESH_SECRET=test-refresh-secret
+      - REDIS_URL=redis://redis-test:6379
+    depends_on:
+      - mongodb-test
+      - redis-test
+    networks:
+      - test-network
+
+  # Test Database
+  mongodb-test:
+    image: mongo:7
+    environment:
+      - MONGO_INITDB_DATABASE=resume_app_test
+    tmpfs:
+      - /data/db
+    networks:
+      - test-network
+
+  # Test Cache
+  redis-test:
+    image: redis:7-alpine
+    tmpfs:
+      - /data
+    networks:
+      - test-network
+
+  # Integration Tests Runner
+  integration-tests:
+    build:
+      context: ./tests
+      dockerfile: Dockerfile
+    environment:
+      - API_URL=http://backend-test:5000
+      - FRONTEND_URL=http://frontend-test:3000
+    depends_on:
+      - frontend-test
+      - backend-test
+    networks:
+      - test-network
+    command: npm test
+
+  # End-to-End Tests
+  e2e-tests:
+    build:
+      context: ./tests/e2e
+      dockerfile: Dockerfile
+    environment:
+      - BASE_URL=http://frontend-test:3000
+    depends_on:
+      - frontend-test
+      - backend-test
+    networks:
+      - test-network
+    command: npm run test:e2e
+
+networks:
+  test-network:
+    driver: bridge 

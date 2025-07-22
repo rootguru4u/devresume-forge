@@ -1,0 +1,23 @@
+FROM node:18-alpine
+
+# Install development dependencies
+RUN apk update && apk upgrade && \
+    apk add --no-cache git && \
+    rm -rf /var/cache/apk/*
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install all dependencies (including dev dependencies)
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Expose port
+EXPOSE 3000
+
+# Development server with hot reloading
+CMD ["npm", "start"] 
