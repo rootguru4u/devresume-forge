@@ -8,8 +8,7 @@ A modern Resume Builder web application with full CI/CD pipeline support, design
 
 Ready to practice CI/CD? Jump to these sections:
 - 📋 [**CI/CD Practice - Quick Start**](#-cicd-practice---quick-start) - Start practicing immediately
-- 📖 [**Comprehensive CI/CD Guide**](./CICD-PRACTICE-GUIDE.md) - Detailed learning path
-- 🚀 [**AWS Deployment Guide**](./AWS-DEPLOYMENT-GUIDE.md) - Deploy to production on AWS
+- 📖 [**DevOps Implementation Guide**](./DEVOPS-IMPLEMENTATION-GUIDE.md) - Complete implementation guide
 - 🐳 [**Docker Commands**](#-docker-practice) - Container practice
 - ☸️ [**Kubernetes Commands**](#️-kubernetes-practice) - Orchestration practice
 
@@ -719,48 +718,6 @@ Add these in your GitHub repository settings → Secrets and variables → Actio
 - `SONAR_TOKEN` (from SonarCloud)
 - `SLACK_WEBHOOK` (optional, for notifications)
 
-#### **AWS Deployment Issues**
-```bash
-# Check AWS CLI configuration
-aws sts get-caller-identity
-
-# Common EC2 issues
-aws ec2 describe-instances --filters "Name=tag:Name,Values=DevResume-Server"
-ssh -i devresume-key.pem ec2-user@INSTANCE_IP
-
-# ECS service issues
-aws ecs describe-services --cluster devresume-cluster --services devresume-frontend-service
-aws logs get-log-events --log-group-name /ecs/devresume-backend
-
-# Check costs
-aws ce get-cost-and-usage --time-period Start=2024-01-01,End=2024-01-31 --granularity MONTHLY
-```
-
-**📖 Need help with AWS deployment? Check the [AWS Deployment Guide](./AWS-DEPLOYMENT-GUIDE.md)**
-
----
-
-## 🎯 Learning Objectives
-
-- **Full-Stack Development**: React + Node.js + MongoDB
-- **DevOps Practices**: Docker, Kubernetes, CI/CD
-- **Cloud Deployment**: Container orchestration
-- **Testing**: Unit, integration, and e2e testing
-- **Security**: Authentication, authorization, data protection
-- **Performance**: Optimization and monitoring
-- **Documentation**: Technical writing and API docs
-
-## 📞 Support
-
-For questions and support:
-- Create an issue in the repository
-- Check the documentation
-- Review the FAQ in the wiki
-
----
-
-**Happy Resume Building! 🚀** 
-
 ## Documentation
 
-- 📖 [**Complete DevOps Guide**](./COMPLETE-DEVOPS-GUIDE.md) - Comprehensive guide covering CI/CD, AWS deployment, and best practices 
+- 📖 [**DevOps Implementation Guide**](./DEVOPS-IMPLEMENTATION-GUIDE.md) - Complete guide covering infrastructure setup, CI/CD, deployment, and best practices 
