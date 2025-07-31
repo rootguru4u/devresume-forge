@@ -611,6 +611,20 @@ aws ec2 describe-security-groups \
                                    (ECS/EKS)         (ECS/EKS)
                                         │                │
                                         │                ▼
+                                        │         ┌──────────────┐
+                                        │         │ SQS Queues   │
+                                        │         ├──────────────┤
+                                        │         │Resume Updates│
+                                        │         │(FIFO Queue)  │
+                                        │         ├──────────────┤
+                                        │         │PDF Generation│
+                                        │         │(Std Queue)   │
+                                        │         ├──────────────┤
+                                        │         │Notifications │
+                                        │         │(Std Queue)   │
+                                        │         └──────┬───────┘
+                                        │                │
+                                        │                ▼
                                         │            RDS Database
                                         │                │
                                         └───────────────►│
@@ -619,344 +633,229 @@ aws ec2 describe-security-groups \
                                                    Monitoring
 ```
 
-## Project Structure Overview
-
-### Directory Layout
+## Message Processing Architecture
 ```
-devresume-forge/
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   └── services/
-│   ├── public/
-│   └── tests/
-├── backend/
-│   ├── src/
-│   │   ├── controllers/
-│   │   ├── models/
-│   │   └── services/
-│   ├── tests/
-│   └── config/
-├── infra/
-│   ├── modules/
-│   │   ├── vpc/
-│   │   ├── ecs/
-│   │   └── rds/
-│   └── environments/
-│       ├── staging/
-│       └── production/
-└── k8s/
-    ├── staging/
-    └── production/
+┌──────────────┐    ┌───────────────┐    ┌──────────────┐    ┌──────────────┐
+│ Frontend     │    │ Backend API   │    │ SQS Queues   │    │ Workers      │
+│ React App    │───►│ Express.js    │───►│ - Resume     │───►│ - Resume     │
+│              │    │               │    │ - PDF        │    │ - PDF        │
+└──────────────┘    └───────────────┘    │ - Notify     │    │ - Notify     │
+                                         └──────────────┘    └──────────────┘
+                                                                    │
+                                         ┌──────────────┐           │
+                                         │ Dead Letter  │◄──────────┘
+                                         │ Queue (DLQ)  │
+                                         └──────────────┘
 ```
 
-### End User Architecture
+## SQS Implementation Details
+
+### 1. Queue Structure
 ```
-                                     End User
-                                        │
-                                        ▼
-                                www.devresume.com
-                                        │
-                                        ▼
-                                   Route 53
-                                        │
-                                        ▼
-                               CloudFront CDN
-                                   ┌────┴────┐
-                                   ▼         ▼
-                             S3 Bucket    ALB
-                                         ┌─┴─┐
-                                         ▼   ▼
-                                  Frontend  Backend
-                                           Service
-                                             │
-                                        ┌────┴────┐
-                                        ▼         ▼
-                                      RDS    ElastiCache
-                                    (PostgreSQL) (Redis)
-                                        │         │
-                                        ▼         ▼
-                                   CloudWatch  Prometheus
-                                        └────┬────┘
-                                            ▼
-                                        Grafana
+Queue Types and Purposes
+┌────────────────────────────────────────────────────────────┐
+│ Resume Updates Queue (FIFO)                                │
+├────────────────────────────────────────────────────────────┤
+│ - Name: devresume-resume-updates.fifo                      │
+│ - Type: FIFO (First-In-First-Out)                         │
+│ - Use: Maintain order of resume updates per user           │
+│ - Deduplication: Content-based                            │
+│ - Message Group ID: user-${userId}                        │
+└────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────┐
+│ PDF Generation Queue (Standard)                            │
+├────────────────────────────────────────────────────────────┤
+│ - Name: devresume-pdf-generation                          │
+│ - Type: Standard                                          │
+│ - Use: Async PDF generation requests                      │
+│ - High throughput processing                              │
+│ - Parallel processing capable                             │
+└────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────┐
+│ Notifications Queue (Standard)                             │
+├────────────────────────────────────────────────────────────┤
+│ - Name: devresume-notifications                           │
+│ - Type: Standard                                          │
+│ - Use: User notifications and emails                      │
+│ - Async notification processing                           │
+└────────────────────────────────────────────────────────────┘
 ```
 
-### Git Branch Flow
+### 2. Message Flow
 ```
-                            main (Production)
-                                  │
-                                  ▼
-                          release/v1.0.0
-                                  │
-                                  ▼
-                         stage (Staging Env)
-                                  │
-                                  ▼
-                          dev (Development)
-                          ┌─────┬─────┐
-                          ▼     ▼     ▼
-                    feature/  feature/  feature/
-                    login    profile   resume
-```
-
-### CI/CD Pipeline Flow
-```
-Developer Push
-      │
-      ▼
-GitHub Repository
-      │
-      ▼
-GitHub Actions CI ─────┬─────────┬─────────┐
-      │               │         │         │
-      ▼               ▼         ▼         ▼
-  Run Tests      Build Docker  Lint    Security
-                   Image             Scan
-      │               │         │         │
-      └───────────────┴─────────┴─────────┘
-                      │
-                      ▼
-              Push to ECR/DockerHub
-                      │
-                      ▼
-            Terraform Infrastructure
-                      │
-            ┌─────────┴──────────┐
-            ▼                    ▼
-    Deploy to ECS          Deploy to EKS
-            │                    │
-    ┌───────┴────────┐   ┌──────┴───────┐
-    ▼               ▼    ▼              ▼
-Frontend         Backend  Frontend     Backend
-Service         Service   Pods         Pods
+User Action                 Queue Processing            Backend Processing
+┌──────────┐               ┌──────────────┐           ┌──────────────┐
+│Update    │──FIFO Queue──►│Ordered      │──Worker──►│Update DB     │
+│Resume    │               │Processing    │           │Generate PDF  │
+└──────────┘               └──────────────┘           └──────────────┘
+     │                                                      │
+     │                     ┌──────────────┐                │
+     └─────Std Queue─────►│PDF           │◄───Worker──────┘
+                          │Generation     │
+                          └──────────────┘
+                                │
+                                │                    ┌──────────────┐
+                                └────Std Queue─────►│Send          │
+                                                   │Notification   │
+                                                   └──────────────┘
 ```
 
-### Infrastructure Components
-```
-                        AWS Cloud
-┌─────────────────────────────────────────────────┐
-│                                                 │
-│   ┌─────────────── VPC ──────────────────┐     │
-│   │                                      │     │
-│   │   ┌────── Public Subnet ─────────┐   │     │
-│   │   │                              │   │     │
-│   │   │        Load Balancer         │   │     │
-│   │   │             │                │   │     │
-│   │   └─────────────┼────────────────┘   │     │
-│   │                 │                     │     │
-│   │   ┌────────────▼─── Private Subnet ──┐     │
-│   │   │                                  │     │
-│   │   │    ┌──────────┐   ┌──────────┐  │     │
-│   │   │    │ Frontend │   │ Backend  │  │     │
-│   │   │    │Container │   │Container │  │     │
-│   │   │    └──────────┘   └──────────┘  │     │
-│   │   │                                  │     │
-│   │   └──────────────────────────────────┘     │
-│   │                                            │
-│   │   ┌────── Database Subnet ──────────┐     │
-│   │   │                                 │     │
-│   │   │    ┌─────────┐   ┌─────────┐   │     │
-│   │   │    │   RDS   │   │ Redis   │   │     │
-│   │   │    └─────────┘   └─────────┘   │     │
-│   │   │                                 │     │
-│   │   └─────────────────────────────────┘     │
-│   │                                           │
-│   └───────────────────────────────────────────┘
-│                                               │
-└───────────────────────────────────────────────┘
+### 3. Infrastructure Setup
+
+```hcl
+# Terraform SQS Configuration
+resource "aws_sqs_queue" "resume_updates" {
+  name                        = "devresume-${var.environment}-resume-updates.fifo"
+  fifo_queue                  = true
+  content_based_deduplication = true
+  visibility_timeout_seconds  = 300
+  message_retention_seconds   = 86400  # 1 day
+  
+  tags = {
+    Environment = var.environment
+    Service     = "resume-processing"
+  }
+}
+
+resource "aws_sqs_queue" "pdf_generation" {
+  name                      = "devresume-${var.environment}-pdf-generation"
+  visibility_timeout_seconds = 600
+  message_retention_seconds = 86400
+  
+  tags = {
+    Environment = var.environment
+    Service     = "pdf-generation"
+  }
+}
+
+resource "aws_sqs_queue" "notifications" {
+  name                      = "devresume-${var.environment}-notifications"
+  visibility_timeout_seconds = 300
+  message_retention_seconds = 86400
+  
+  tags = {
+    Environment = var.environment
+    Service     = "notifications"
+  }
+}
+
+# Dead Letter Queues
+resource "aws_sqs_queue" "resume_updates_dlq" {
+  name = "devresume-${var.environment}-resume-updates-dlq.fifo"
+  fifo_queue = true
+  
+  tags = {
+    Environment = var.environment
+    Service     = "resume-processing-dlq"
+  }
+}
+
+resource "aws_sqs_queue" "pdf_generation_dlq" {
+  name = "devresume-${var.environment}-pdf-generation-dlq"
+  
+  tags = {
+    Environment = var.environment
+    Service     = "pdf-generation-dlq"
+  }
+}
 ```
 
-### Deployment Flow
+### 4. Monitoring Setup
 ```
-Code Push ──► Build ──► Test ──► Package ──► Deploy
-   │           │        │         │          │
-   ▼           ▼        ▼         ▼          ▼
-GitHub    Docker Image  Unit   Container   Target Env
-   │           │       Tests    Registry      │
-   │           │         │         │         │
-   └───────────┴─────────┴─────────┴─────────┘
-                         │
-                     Monitoring
-                         │
-                  ┌──────┴───────┐
-                  ▼              ▼
-             CloudWatch      Prometheus
-                  │              │
-                  └──────┬───────┘
-                         ▼
-                     Grafana
+CloudWatch Dashboard Layout
+┌────────────────────┐ ┌────────────────────┐ ┌────────────────────┐
+│   Queue Metrics    │ │   Worker Metrics   │ │   Error Metrics    │
+├────────────────────┤ ├────────────────────┤ ├────────────────────┤
+│- Message Count     │ │- Processing Time   │ │- Failed Messages   │
+│- Age of Messages   │ │- Worker Health     │ │- DLQ Count        │
+│- In Flight Count   │ │- CPU/Memory Usage  │ │- Error Types      │
+└────────────────────┘ └────────────────────┘ └────────────────────┘
+
+Alarms Configuration
+┌────────────────────────────────────────────────────────┐
+│ High Priority Alarms                                   │
+├────────────────────────────────────────────────────────┤
+│ - Queue depth > 1000 messages                         │
+│ - Message age > 10 minutes                            │
+│ - DLQ message count > 0                               │
+│ - Worker error rate > 5%                              │
+└────────────────────────────────────────────────────────┘
 ```
 
-## Branch Creation and Management
+### 5. Implementation Commands
 
-### 1. Initial Branch Setup
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/devresume-forge.git
-cd devresume-forge
+# Create SQS Queues
+aws sqs create-queue \
+  --queue-name devresume-${ENV}-resume-updates.fifo \
+  --attributes FifoQueue=true,ContentBasedDeduplication=true
 
-# Create main branch (if not exists)
-git checkout -b main
-git push -u origin main
+aws sqs create-queue \
+  --queue-name devresume-${ENV}-pdf-generation
 
-# Create dev branch
-git checkout -b dev
-git push -u origin dev
+aws sqs create-queue \
+  --queue-name devresume-${ENV}-notifications
 
-# Create stage branch
-git checkout -b stage
-git push -u origin stage
+# Create Dead Letter Queues
+aws sqs create-queue \
+  --queue-name devresume-${ENV}-resume-updates-dlq.fifo \
+  --attributes FifoQueue=true
+
+aws sqs create-queue \
+  --queue-name devresume-${ENV}-pdf-generation-dlq
+
+# Set up CloudWatch Alarms
+aws cloudwatch put-metric-alarm \
+  --alarm-name devresume-${ENV}-queue-depth \
+  --metric-name ApproximateNumberOfMessagesVisible \
+  --namespace AWS/SQS \
+  --statistic Average \
+  --period 300 \
+  --evaluation-periods 2 \
+  --threshold 1000 \
+  --comparison-operator GreaterThanThreshold \
+  --alarm-actions ${SNS_TOPIC_ARN}
 ```
 
-### 2. Feature Branch Workflow
-```bash
-# Update dev branch
-git checkout dev
-git pull origin dev
+### 6. Deployment Updates
 
-# Create feature branch
-git checkout -b feature/user-authentication
-git push -u origin feature/user-authentication
-
-# Make changes and commit
-git add .
-git commit -m "feat: implement user authentication"
-git push origin feature/user-authentication
-
-# Create PR to dev (via GitHub UI)
-# After PR approval and merge:
-git checkout dev
-git pull origin dev
-```
-
-### 3. Release Branch Creation
-```bash
-# Create release branch from stage
-git checkout stage
-git pull origin stage
-git checkout -b release/v1.0.0
-git push -u origin release/v1.0.0
-
-# Make release fixes if needed
-git add .
-git commit -m "fix: address release feedback"
-git push origin release/v1.0.0
-
-# Create PR to main (via GitHub UI)
-```
-
-### 4. Hotfix Workflow
-```bash
-# Create hotfix branch from main
-git checkout main
-git pull origin main
-git checkout -b hotfix/critical-fix
-git push -u origin hotfix/critical-fix
-
-# Make fixes and commit
-git add .
-git commit -m "fix: critical production issue"
-git push origin hotfix/critical-fix
-
-# Create PR to main AND dev (via GitHub UI)
-```
-
-### 5. Branch Cleanup
-```bash
-# Delete local feature branch
-git branch -d feature/user-authentication
-
-# Delete remote feature branch
-git push origin --delete feature/user-authentication
-
-# Prune remote branches
-git remote prune origin
-
-# List all branches
-git branch -a
-```
-
-### 6. Branch Protection Setup
-
-1. **Configure via GitHub UI**:
-   - Go to Settings > Branches
-   - Add branch protection rule
-   - Enter branch name pattern
-   - Configure protection settings
-
-2. **Protection Settings for Each Branch**:
+Update the deployment workflow to include SQS worker services:
 
 ```yaml
-# main branch
-protection:
-  required_reviews: 2
-  required_checks: true
-  enforce_admins: true
-  restrict_pushes: true
+name: Deploy SQS Workers
 
-# stage branch
-protection:
-  required_reviews: 1
-  required_checks: true
-  enforce_admins: true
-  restrict_pushes: true
+on:
+  push:
+    branches: [dev, stage, main]
 
-# dev branch
-protection:
-  required_reviews: 1
-  required_checks: true
-  enforce_admins: false
-  restrict_pushes: false
-```
-
-### 7. Branch Synchronization
-```bash
-# Sync dev with stage
-git checkout dev
-git pull origin dev
-git merge stage
-git push origin dev
-
-# Sync stage with main
-git checkout stage
-git pull origin stage
-git merge main
-git push origin stage
-```
-
-### 8. Version Tagging
-```bash
-# Create version tag
-git checkout main
-git pull origin main
-git tag -a v1.0.0 -m "Version 1.0.0 release"
-git push origin v1.0.0
-
-# List tags
-git tag -l
-
-# Delete tag if needed
-git tag -d v1.0.0
-git push origin --delete v1.0.0
-```
-
-### 9. Branch Status Check
-```bash
-# Check branch status
-git status
-
-# View branch history
-git log --graph --oneline --decorate --all
-
-# Compare branches
-git diff dev..stage
-git diff stage..main
-
-# List merged branches
-git branch --merged
-git branch --no-merged
+jobs:
+  deploy-workers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Deploy Resume Processor
+        run: |
+          aws ecs update-service \
+            --cluster devresume-${GITHUB_REF_NAME}-cluster \
+            --service resume-processor \
+            --force-new-deployment
+      
+      - name: Deploy PDF Generator
+        run: |
+          aws ecs update-service \
+            --cluster devresume-${GITHUB_REF_NAME}-cluster \
+            --service pdf-generator \
+            --force-new-deployment
 ```
 
 ## 1. Developer Environment Setup
