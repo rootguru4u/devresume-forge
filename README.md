@@ -1,4 +1,4 @@
-# DevResume Forge
+# DevResume-Forge
 
 A modern Resume Builder web application with full CI/CD pipeline support, designed for learning full-stack development and DevOps practices.
 
@@ -760,3 +760,7 @@ For questions and support:
 ---
 
 **Happy Resume Building! 🚀** 
+
+## Documentation
+
+- 📖 [**Complete DevOps Guide**](./COMPLETE-DEVOPS-GUIDE.md) - Comprehensive guide covering CI/CD, AWS deployment, and best practices 
