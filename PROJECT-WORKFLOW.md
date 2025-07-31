@@ -486,6 +486,239 @@ Production (devresume-forge.com)
 └───────────────┘
 ```
 
+## Message Processing Workflow
+
+### SQS Queue Structure
+```
+┌─────────────────────────────────────────────────────────┐
+│                   AWS SQS Queues                        │
+├─────────────┬─────────────────────┬───────────────────┤
+│ Queue Type  │ Purpose            │ Processing        │
+├─────────────┼─────────────────────┼───────────────────┤
+│ FIFO       │ Resume Updates      │ Ordered Updates   │
+│ Standard   │ PDF Generation      │ Async Processing  │
+│ Standard   │ Notifications       │ Event Handling    │
+└─────────────┴─────────────────────┴───────────────────┘
+```
+
+### Development Workflow with SQS
+```
+Developer                    CI/CD Pipeline              AWS Environment
+┌──────────────┐         ┌──────────────┐            ┌──────────────┐
+│1. Code Change│         │4. Build &    │            │7. Deploy     │
+│   - Frontend ├────────►│   Test       ├───────────►│   Workers    │
+│   - Backend  │         │              │            │              │
+└──────┬───────┘         └──────┬───────┘            └──────┬───────┘
+       │                        │                            │
+       │                        │                            │
+       ▼                        ▼                            ▼
+┌──────────────┐         ┌──────────────┐            ┌──────────────┐
+│2. Local Test │         │5. Create     │            │8. Monitor    │
+│   - Queue    │         │   Queue      │            │   - Metrics  │
+│   Simulation │         │   Resources  │            │   - Logs     │
+└──────┬───────┘         └──────┬───────┘            └──────┬───────┘
+       │                        │                            │
+       │                        │                            │
+       ▼                        ▼                            ▼
+┌──────────────┐         ┌──────────────┐            ┌──────────────┐
+│3. Create PR  │         │6. Configure  │            │9. Alert &    │
+│   - Reviews  │         │   Workers    │            │   Scale      │
+│   - Tests    │         │              │            │              │
+└──────────────┘         └──────────────┘            └──────────────┘
+```
+
+### Message Flow Example
+```
+User Action           SQS Processing         Backend Processing
+┌──────────┐         ┌──────────────┐       ┌──────────────┐
+│Update    │─FIFO───►│Queue Message │──────►│Process Update│
+│Resume    │         │              │       │              │
+└──────────┘         └──────────────┘       └──────┬───────┘
+     │                                             │
+     │                                            ▼
+     │                                     ┌──────────────┐
+     │                                     │Update DB     │
+     │                                     │              │
+     │                                     └──────┬───────┘
+     │                                            │
+     │                ┌──────────────┐           │
+     └────Standard───►│PDF Generation│◄──────────┘
+                     │Queue          │
+                     └──────┬────────┘
+                            │
+                            ▼
+                     ┌──────────────┐
+                     │Send          │
+                     │Notification  │
+                     └──────────────┘
+```
+
+### Team Responsibilities
+
+#### DevOps Team (James Foster & Team)
+```
+Primary Responsibilities:
+┌────────────────────────────────────────┐
+│ Queue Management                       │
+├────────────────────────────────────────┤
+│ 1. Create & Configure Queues           │
+│ 2. Set Up Dead Letter Queues           │
+│ 3. Configure Auto-Scaling              │
+│ 4. Monitor Queue Health                │
+│ 5. Manage Queue Permissions            │
+└────────────────────────────────────────┘
+
+┌────────────────────────────────────────┐
+│ Worker Deployment                      │
+├────────────────────────────────────────┤
+│ 1. Deploy Worker Services              │
+│ 2. Configure Worker Auto-Scaling       │
+│ 3. Monitor Worker Health               │
+│ 4. Handle Worker Updates               │
+└────────────────────────────────────────┘
+```
+
+#### Backend Team (Emily Watson & Team)
+```
+Primary Responsibilities:
+┌────────────────────────────────────────┐
+│ Message Processing                     │
+├────────────────────────────────────────┤
+│ 1. Implement Message Handlers          │
+│ 2. Handle Message Validation           │
+│ 3. Implement Retry Logic               │
+│ 4. Error Handling & Logging            │
+└────────────────────────────────────────┘
+
+┌────────────────────────────────────────┐
+│ Worker Implementation                  │
+├────────────────────────────────────────┤
+│ 1. Develop Worker Services             │
+│ 2. Implement Processing Logic          │
+│ 3. Handle Database Updates             │
+│ 4. Manage Worker State                 │
+└────────────────────────────────────────┘
+```
+
+#### Frontend Team (David Kim & Team)
+```
+Primary Responsibilities:
+┌────────────────────────────────────────┐
+│ User Interface                         │
+├────────────────────────────────────────┤
+│ 1. Implement Progress Indicators       │
+│ 2. Handle Async Updates                │
+│ 3. Show Processing Status              │
+│ 4. Error State Management              │
+└────────────────────────────────────────┘
+```
+
+### Daily Operations
+
+#### 1. Queue Monitoring Schedule
+```
+Time (EST)     Team Member    Responsibility
+─────────────────────────────────────────────
+09:00-13:00    James         Primary Monitor
+13:00-17:00    Alex          Secondary Monitor
+17:00-21:00    Carlos        Evening Monitor
+21:00-09:00    PagerDuty     On-Call Alert
+```
+
+#### 2. Alert Response Flow
+```
+Alert Detected
+      │
+      ▼
+┌──────────────┐
+│Check Queue   │
+│Metrics       │
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐    ┌──────────────┐
+│Queue Issue?  │Yes │Scale Queue    │
+│              ├───►│Capacity       │
+└──────┬───────┘    └──────────────┘
+       │No
+       ▼
+┌──────────────┐    ┌──────────────┐
+│Worker Issue? │Yes │Restart/Scale  │
+│              ├───►│Workers        │
+└──────┬───────┘    └──────────────┘
+       │No
+       ▼
+┌──────────────┐
+│Escalate to   │
+│DevOps Team   │
+└──────────────┘
+```
+
+#### 3. Deployment Checklist
+```
+┌────────────────────────────────────────┐
+│ Pre-Deployment                         │
+├────────────────────────────────────────┤
+│ □ Verify Queue Configurations          │
+│ □ Check Worker Service Definitions     │
+│ □ Review Auto-Scaling Settings         │
+│ □ Validate IAM Permissions             │
+│ □ Test Message Processing              │
+└────────────────────────────────────────┘
+
+┌────────────────────────────────────────┐
+│ Post-Deployment                        │
+├────────────────────────────────────────┤
+│ □ Monitor Queue Metrics                │
+│ □ Verify Worker Health                 │
+│ □ Check Message Processing             │
+│ □ Validate Error Handling              │
+│ □ Review CloudWatch Logs               │
+└────────────────────────────────────────┘
+```
+
+### Troubleshooting Guide
+
+#### 1. Common Issues and Solutions
+```
+Issue                     Solution
+──────────────────────────────────────────
+Messages Stuck          Check visibility timeout
+                       Verify worker health
+                       Check IAM permissions
+
+High Latency           Scale worker capacity
+                       Check queue throughput
+                       Optimize processing
+
+DLQ Messages           Review error logs
+                       Check message format
+                       Verify handler logic
+```
+
+#### 2. Debug Commands
+```bash
+# Check Queue Status
+aws sqs get-queue-attributes \
+  --queue-url ${QUEUE_URL} \
+  --attribute-names All
+
+# View Worker Logs
+aws logs get-log-events \
+  --log-group-name /ecs/devresume-workers \
+  --log-stream-name ${WORKER_NAME}
+
+# Monitor Processing
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/SQS \
+  --metric-name ApproximateNumberOfMessagesVisible \
+  --dimensions Name=QueueName,Value=${QUEUE_NAME} \
+  --start-time $(date -v-1H +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date +%Y-%m-%dT%H:%M:%S) \
+  --period 300 \
+  --statistics Average
+```
+
 ## For New Team Members 🌟
 
 ### Understanding Our Development Process
@@ -704,63 +937,3 @@ Common Commands:
       cd devresume-forge
       docker-compose up -d
    ```
-
-2. **Common Git Commands**
-   ```
-   # Update your local code
-   git fetch origin
-   git pull origin dev
-
-   # Create new branch
-   git checkout -b feature/DEV-123-description
-
-   # Check status
-   git status
-
-   # Commit changes
-   git add .
-   git commit -m "DEV-123: Description"
-
-   # Push changes
-   git push origin feature/DEV-123-description
-   ```
-
-3. **Docker Commands**
-   ```
-   # Start all services
-   docker-compose up -d
-
-   # Check logs
-   docker-compose logs -f frontend
-   docker-compose logs -f backend
-
-   # Rebuild services
-   docker-compose build
-
-   # Stop all services
-   docker-compose down
-   ```
-
-4. **AWS Commands**
-   ```
-   # Check ECS services
-   aws ecs list-services --cluster devresume-dev-cluster
-
-   # Check logs
-   aws logs get-log-events --log-group-name /ecs/frontend
-
-   # List ECR images
-   aws ecr list-images --repository-name devresume-frontend
-   ```
-
-5. **Getting Help**
-   ```
-   Priority    Channel           Example
-   ─────────   ───────────      ───────────────────────
-   P0 (High)   #tech-911        Production down
-   P1          #tech-help       Build failing
-   P2          #team-chat       General questions
-   P3 (Low)    Documentation    How-to guides
-   ```
-
-This workflow document serves as a comprehensive guide for all team members, ensuring consistent processes and clear communication channels throughout the development lifecycle. 
